@@ -5,7 +5,7 @@ from itertools import combinations
 from skimage.draw import line_aa
 from dataclasses import dataclass
 import matplotlib.patches as patches
-
+import copy
 
 
 
@@ -43,6 +43,11 @@ class Canvas:
         # Initialization: all pixels are white
         self.pixels = [Pixel(i, x, y, l_x, l_y) for i, (x, y, l_x, l_y) in enumerate(self.center_and_label_pixels_positions)]
 
+        # PIXELS OF THE TARGET IMAGE ( NO RESCALING VIA s FACTOR):
+        self.center_and_label_pixels_positions_target = ((i + 0.5, j + 0.5, i, j) for i in range(self.image_size) for j in range(self.image_size))
+        # Initialization: all pixels are white
+        self.pixels_target = [Pixel(i, x, y, l_x, l_y) for i, (x, y, l_x, l_y) in enumerate(self.center_and_label_pixels_positions_target)]
+
         # ANCHOR PEGS:
         self.anchor_pegs_positions = self.generate_pegs_positions()
         self.anchor_pegs = [Peg(i, x, y, pixel_pos) for i, (x, y, pixel_pos) in enumerate(self.anchor_pegs_positions)]
@@ -56,15 +61,22 @@ class Canvas:
 
         # x, A, y, D, Identity matrix INITIALISATION:
         # X = vector of all possible edges (binary)
-        self.x = torch.zeros(size=(self.l, ), dtype=torch.float32).to(self.device)
-        # true vector representing target image
-        self.y_true = torch.from_numpy(y_true).to(self.device)
+        self.x = torch.zeros(size=(self.l, ), dtype=torch.float16).to(self.device)
         # map to go from edge space to pixel space
         self.A = self.matrix_A().to(self.device)
         # Identity matrix: useful for computing the optimisation step
-        self.I = torch.eye(self.l).to(self.device)
+        self.I = torch.eye(self.l, dtype=torch.float16).to(self.device)
         # Let's build the reduction matrix here:
-        self.D = self.matrix_D().to(self.device)
+        self.R, self.C = self.matrix_D()
+        self.R = self.R.to(self.device)
+        self.C = self.C.to(self.device)
+        # Matrix H:
+        self.H = self.matrix_H().to(self.device)
+        # true vector representing target image
+        y = y_true.reshape((image_size, image_size))
+        self.y = 1 - torch.from_numpy(y).to(self.device)
+        self.y_true = (self.H * self.y).reshape((image_size * image_size,))
+
 
 
     def generate_pegs_positions(self, ):
@@ -97,13 +109,15 @@ class Canvas:
 
 
     def matrix_H(self):
-        H = torch.zeros(size=(self.image_size, self.image_size), dtype=torch.float32)#.to(self.device)
-        center = self.image_size / 2
-        radius = 0.5 *  self.image_size
+        H = torch.zeros(size=(self.image_size, self.image_size), dtype=torch.float16)#.to(self.device)
+        center = 0.5 * self.image_size
+        radius = 0.5 * self.image_size
         for i in range(self.m_pixels):
-            if sqrt((self.pixels[i].x_center - center)**2 + (self.pixels[i].y_center - center)**2) < radius:
-                H[self.pixels[i].x_label, self.pixels[i].y_label] = 1.
-
+            if sqrt((self.pixels_target[i].x_center - center)**2 + (self.pixels_target[i].y_center - center)**2) < radius:
+                H[self.pixels_target[i].x_label, self.pixels_target[i].y_label] = 1.
+            for j in range(len(self.anchor_pegs)):
+                if self.anchor_pegs[j].label == self.pixels_target[i].label:
+                    H[self.pixels_target[i].x_label, self.pixels_target[i].y_label] = 0.
         return H
 
 
@@ -111,16 +125,19 @@ class Canvas:
 
     def matrix_D(self):
         """
-        Builds a reduction matrix R of shape (m, m*s*s) to average over s*s rows.
-        """
-        rows = self.m_pixels * self.s * self.s
-        D = torch.zeros((self.m_pixels, rows))
 
-        for i in range(self.m_pixels):
-            start = i * self.s * self.s
-            end = start + self.s * self.s
-            D[i, start:end] = 1 / (self.s * self.s)
-        return D
+        """
+        ms = self.image_size * self.s
+
+        R = torch.zeros((self.image_size , ms), dtype=torch.float16)
+        for i in range(self.image_size ):
+            R[i, i * self.s: (i + 1) * self.s] = 1 / self.s
+
+        C = torch.zeros((ms, self.image_size ), dtype=torch.float16)
+        for j in range(self.image_size ):
+            C[j * self.s: (j + 1) * self.s, j] = 1 / self.s
+
+        return R, C
 
 
     def matrix_A(self):
@@ -130,7 +147,7 @@ class Canvas:
         of pixels is increased by a factor s.
         Matrix A in high-resolution if self.s > 1.
         """
-        A = torch.zeros(size=(self.m_pixels * self.s * self.s, self.l), dtype=torch.float32)
+        A = torch.zeros(size=(self.m_pixels * self.s * self.s, self.l), dtype=torch.float16)
         for j, (i1, i2) in enumerate(self.possible_threads_combinations):
             p1_x, p1_y = self.anchor_pegs[i1].x, self.anchor_pegs[i1].y
             p2_x, p2_y = self.anchor_pegs[i2].x, self.anchor_pegs[i2].y
@@ -185,42 +202,62 @@ class Canvas:
         end
         """
 
-        def compute_loss(i: int, plus: bool):
-            e_i = self.I[i]
-            difference_vector = (self.D @ (self.A @ (self.x + e_i)).clamp_max(1.0) - self.y_true) if plus else (self.D @ (self.A @ (self.x - e_i)).clamp_max(1.0) - self.y_true)
-            return torch.linalg.norm(difference_vector).item()
+        def compute_loss_minus(k: int, i: int):
+            if k != i:
+                el = (k, i) if k < i else (i, k)
+                index = self.possible_threads_combinations.index(el)
+
+                e_i = self.I[index]
+                Ax = (self.A @ (self.x - e_i)).clamp_max(1.0).reshape(self.image_size * self.s, self.image_size * self.s)
+                difference_vector = (self.R @ Ax @ self.C).reshape(self.image_size*self.image_size,) - self.y_true
+                return torch.linalg.norm(difference_vector).item(), index
+            else:
+                return 100000., 0
+
+        def compute_loss_plus(k: int, i: int):
+            if k != i:
+                el = (k, i) if k < i else (i, k)
+                index = self.possible_threads_combinations.index(el)
+
+                e_i = self.I[index]
+                Ax = (self.A @ (self.x + e_i)).clamp_max(1.0).reshape(self.image_size * self.s, self.image_size * self.s)
+                difference_vector = (self.R @ Ax @ self.C).reshape(self.image_size*self.image_size,) - self.y_true
+                return torch.linalg.norm(difference_vector).item(), index
+            else:
+                return 100000., 0
 
         old_error = 10000000.
-        set_possible_indexes = set(range(self.l))
+        #set_possible_indexes = set(range(self.l))
+        set_possible_indexes = set(range(self.n_pegs))
+        for _ in range(30):
+            k = int(self.n_pegs*torch.rand(1).item())
+            print(k)
+            # add edges
+            while True:
+                print('.')
+                vector_losses = torch.tensor([compute_loss_plus(k, i)[0] for i in set_possible_indexes])
+                j = int(torch.argmin(vector_losses))
+                error, index = compute_loss_plus(k, j)
+                k = copy.deepcopy(j)
+                if error < old_error:
+                    self.x[index] = 1
+                    old_error = error
+                else:
+                    break
+            # remove edges
+            k = int(self.n_pegs * torch.rand(1).item())
+            while True:
+                print('..')
+                vector_losses = torch.tensor([compute_loss_minus(k, i)[0] for i in set_possible_indexes])
+                j = int(torch.argmin(vector_losses))
+                error, index = compute_loss_minus(k, j)
+                k = copy.deepcopy(j)
+                if error < old_error:
+                    self.x[index] = 0
+                    old_error = error
+                else:
+                    break
 
-        # add edges
-        while True:
-            print("ciao sono in plus true")
-            vector_losses = torch.tensor([compute_loss(i, plus=True) for i in set_possible_indexes])
-            j = int(torch.argmin(vector_losses))
-            print(j)
-            set_possible_indexes -= {j}
-            error = compute_loss(j, plus=True)
-            if error < old_error:
-                self.x[j] = 1
-                old_error = error
-            else:
-                break
-
-        # remove edges
-        while True:
-            print("ciao sono in plus false")
-            vector_losses = torch.tensor([compute_loss(i, plus=False) for i in set_possible_indexes])
-            j = int(torch.argmin(vector_losses))
-            print(j)
-            set_possible_indexes -= {j}
-            error = compute_loss(j, plus=False)
-            if error < old_error:
-                self.x[j] = 1
-                old_error = error
-            else:
-                break
-
-        output = self.D @ (self.A @ self.x).clamp_max(1.0)
+        output = (self.R @ (self.A @ self.x).clamp_max(1.0).reshape(self.image_size * self.s, self.image_size * self.s) @ self.C).cpu()
 
         return output
