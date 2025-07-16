@@ -14,16 +14,3 @@ def image_to_vector(image_path, target_size=(512, 512)):
     img = img.astype(np.float32) / 255.0
     b = img.flatten()
     return b
-
-
-
-"""
-    def matrix_D(self, v):
-
-        h, w = self.image_size*self.s, self.image_size*self.s
-        assert h % self.s == 0 and w % self.s == 0
-
-        new_h, new_w = h // self.s, w // self.s
-        small_matrix = v.reshape(new_h, self.s, new_w, self.s).mean(axis=(1, 3))
-        return small_matrix.reshape(new_h*new_w,)
-"""

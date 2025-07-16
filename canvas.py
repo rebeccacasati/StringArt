@@ -70,10 +70,13 @@ class Canvas:
         self.R, self.C = self.matrix_D()
         self.R = self.R.to(self.device)
         self.C = self.C.to(self.device)
-        # Matrix H:
+
+        # TARGET IMAGE:
+        # Matrix H: it multiplies the target image for the loss computation (bounding the portraits to a circle)
         self.H = self.matrix_H().to(self.device)
-        # true vector representing target image
+        # True vector representing target image:
         y = y_true.reshape((image_size, image_size))
+        # Let's invert black and white pixels:
         self.y = 1 - torch.from_numpy(y).to(self.device)
         self.y_true = (self.H * self.y).reshape((image_size * image_size,))
 
@@ -113,8 +116,10 @@ class Canvas:
         center = 0.5 * self.image_size
         radius = 0.5 * self.image_size
         for i in range(self.m_pixels):
+            # Evaluating the position of each pixel whether it's inside or outside the circle of pegs:
             if sqrt((self.pixels_target[i].x_center - center)**2 + (self.pixels_target[i].y_center - center)**2) < radius:
                 H[self.pixels_target[i].x_label, self.pixels_target[i].y_label] = 1.
+            # Setting the pixels corresponding to the pegs to zero.
             for j in range(len(self.anchor_pegs)):
                 if self.anchor_pegs[j].label == self.pixels_target[i].label:
                     H[self.pixels_target[i].x_label, self.pixels_target[i].y_label] = 0.
@@ -125,7 +130,7 @@ class Canvas:
 
     def matrix_D(self):
         """
-
+        Dimensionality reduction step: in the paper it is called matrix D. Here the operation is splitted into two matrices.
         """
         ms = self.image_size * self.s
 
@@ -163,29 +168,6 @@ class Canvas:
             A[indices, j] += val  # val is also a 1D array, same length as indices
 
         return A
-
-
-    def visualize_A(self) -> None :
-        """
-
-        """
-        fig, ax = plt.subplots()
-        for row in range(self.m_pixels):
-            for col in range(self.l):
-                color = 'black' if self.A[row][col] == 1 else 'white'
-                # Normalize coordinates to [0,1]
-                x = col / self.l
-                y = row / self.m_pixels
-                cell_width = 1 / self.l
-                cell_height = 1 / self.m_pixels
-                square = patches.Rectangle((x, y), cell_width, cell_height, facecolor=color, edgecolor='gray', linewidth=0.5)
-                ax.add_patch(square)
-        # Draw grid lines
-        for x in torch.linspace(0, 1, self.l + 1):
-            ax.axvline(x, color='black', linestyle='-', linewidth=0.5)
-        for y in torch.linspace(0, 1, self.m_pixels + 1):
-            ax.axhline(y, color='black', linestyle='-', linewidth=0.5)
-        plt.show()
 
 
     def greedy_optimisation(self):
@@ -229,6 +211,7 @@ class Canvas:
         old_error = 10000000.
         #set_possible_indexes = set(range(self.l))
         set_possible_indexes = set(range(self.n_pegs))
+
         for _ in range(30):
             k = int(self.n_pegs*torch.rand(1).item())
             print(k)
@@ -261,3 +244,26 @@ class Canvas:
         output = (self.R @ (self.A @ self.x).clamp_max(1.0).reshape(self.image_size * self.s, self.image_size * self.s) @ self.C).cpu()
 
         return output
+
+
+    def visualize_A(self) -> None :
+        """
+
+        """
+        fig, ax = plt.subplots()
+        for row in range(self.m_pixels):
+            for col in range(self.l):
+                color = 'black' if self.A[row][col] == 1 else 'white'
+                # Normalize coordinates to [0,1]
+                x = col / self.l
+                y = row / self.m_pixels
+                cell_width = 1 / self.l
+                cell_height = 1 / self.m_pixels
+                square = patches.Rectangle((x, y), cell_width, cell_height, facecolor=color, edgecolor='gray', linewidth=0.5)
+                ax.add_patch(square)
+        # Draw grid lines
+        for x in torch.linspace(0, 1, self.l + 1):
+            ax.axvline(x, color='black', linestyle='-', linewidth=0.5)
+        for y in torch.linspace(0, 1, self.m_pixels + 1):
+            ax.axhline(y, color='black', linestyle='-', linewidth=0.5)
+        plt.show()

@@ -27,13 +27,6 @@ def main():
 
     c = Canvas(image_size=image_size, n_pegs=n_pegs, y_true=y_vector, s=s)
 
-    #H = c.matrix_H()
-    #y = H * (1-y)
-    #plt.imshow(y, cmap='gray_r', vmin=0, vmax=1)
-    #plt.show()
-
-    #print('Pixels: ', c.pixels)
-    #print('Pegs: ', c.anchor_pegs)
     #x_tilde = np.ones(shape=(len(list(combinations(range(n_pegs), 2))), ), dtype=np.float32)
 
     #print(x)
@@ -43,38 +36,19 @@ def main():
     #c.visualize_A()
 
     #R, C = c.matrix_D()
-
     #y = (A @ x_tilde).reshape((image_size*s,image_size*s))
     #y = R @ y @ C
 
     #plt.matshow(y, cmap='gray_r', vmin=0, vmax=1)
     #plt.show()
 
-
-    #sys.exit()
-
-    y_pred = c.greedy_optimisation().cpu().reshape((image_size,image_size))
+    y_pred = c.greedy_optimisation().reshape((image_size,image_size))
 
     plt.matshow(y_pred, cmap='gray_r', vmin=0, vmax=1)
     plt.savefig(f'Results/Topolino_{n_pegs}_{image_size}.pdf')
     plt.show()
 
-    #sys.exit()
     #y = y.reshape((image_size * image_size * s *s, ))
-
-    # initialization of edge vector
-    #x = np.array(...)
-
-    # compute approximated image
-    #y_pred = A @ x
-    # clamping
-    #CAy_pred = c.matrix_C(y)
-    # dimensionality reduction
-    #DCAy_pred = c.matrix_D(CAy_pred)
-    #print(DCA.shape)
-
-    #sys.exit()
-
     # linear leas squares optimizer
     #result = lsqr(DCA, y)
     #x = result[0]  # Solution vector
