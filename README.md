@@ -52,3 +52,8 @@ Before running it, make sure the target image path in `main.py` points to an ima
 
 ## Project status
 The project has been completed for the final exam of the course (approved in July 2025). The contributors have some ideas for future developments.
+
+## Authors
+
+- Rebecca Casati
+- Paolo Zentilini
